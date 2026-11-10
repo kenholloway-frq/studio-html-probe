@@ -119,7 +119,8 @@
     var p = [['Full address', esc(location.href)]];
     try { new URLSearchParams(location.search).forEach(function (v, k) { params.push([k, v]); }); } catch (e) {}
     params.forEach(function (kv) {
-      var v = kv[1], changed = v && !/^__F\d\d__$/.test(v);
+      // still a placeholder (yellow) if it looks like any code style we test: __F01__, [F01], FREQ_*, {{...}}, $FREQ_*
+      var v = kv[1], changed = v && !/^(__F\d\d__|\[F\d\d\]|FREQ_[A-Z_]+|\{\{[A-Za-z_.]+\}\}|\$\{?FREQ_[A-Z_]+\}?)$/.test(v);
       p.push(['?' + kv[0], esc(v === '' ? '(empty)' : v), changed ? 'mono hit' : 'mono warn']);
     });
     if (!params.length) p.push(['Query values', '<span class="none">None. Add ?f01=__F01__ to the URL in Studio and map __F01__ to a field.</span>', '']);
