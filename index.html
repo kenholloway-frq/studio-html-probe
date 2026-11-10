@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=1920, height=1080">
+<title>Studio HTML overlay test</title>
+<!--
+  Frequency Studio HTML overlay probe. Self-contained: no external files, fonts or network calls.
+  Shows everything the page can see about how Studio loads it:
+    - the full address and every query parameter (map Studio "Text to Replace" codes into the URL, e.g. ?f01=__F01__)
+    - messages posted to the page (postMessage) and calls to common template functions (update, play, stop, next ...)
+    - extra global variables injected by the player
+    - whether text inside the page gets replaced (literal placeholders below)
+    - a time-format demo: turns a full date-time such as 2026-11-10T20:00:00+00:00 into "8pm"
+    - transparency swatches and a moving bar (rendering check)
+  Nothing is stored or sent anywhere.
+-->
+<style>
+  :root { --panel: rgba(5, 8, 14, 0.86); --ink: #ffffff; --muted: #aab4c4; --accent: #00a0e0; --hit: #2ee59d; --warn: #ffcc00; }
+  html, body { margin: 0; background: transparent; width: 1920px; height: 1080px; overflow: hidden; }
+  body { font: 22px/1.35 system-ui, -apple-system, 'Segoe UI', Roboto, 'DejaVu Sans', sans-serif; color: var(--ink); }
+  .panel { position: absolute; left: 96px; top: 54px; width: 1010px; max-height: 820px; box-sizing: border-box; padding: 22px 28px; background: var(--panel); border-radius: 12px; overflow: hidden; display: grid; gap: 14px; }
+  h1 { margin: 0; font-size: 30px; letter-spacing: 0.08em; color: var(--accent); display: flex; justify-content: space-between; align-items: baseline; }
+  h1 .clock { font-variant-numeric: tabular-nums; color: var(--ink); letter-spacing: 0.02em; font-size: 28px; }
+  h2 { margin: 0 0 4px; font-size: 17px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+  .rows { display: grid; grid-template-columns: 220px 1fr; gap: 2px 16px; }
+  .rows div:nth-child(odd) { color: var(--muted); }
+  .rows div { overflow-wrap: anywhere; }
+  code, .mono { font-family: ui-monospace, 'DejaVu Sans Mono', Menlo, monospace; font-size: 19px; }
+  .none { color: var(--muted); font-style: italic; }
+  .hit { color: var(--hit); }
+  .warn { color: var(--warn); }
+  .log { display: grid; gap: 4px; max-height: 260px; overflow: hidden; }
+  .log div { overflow-wrap: anywhere; }
+  .panel.right { left: 1130px; width: 694px; }
+  .panel.right .rows { grid-template-columns: 170px 1fr; }
+  .swatches { position: absolute; right: 96px; bottom: 90px; display: flex; gap: 12px; }
+  .swatch { width: 160px; height: 70px; border: 2px solid #ea0a2a; border-radius: 6px; background: #fff; display: grid; place-items: center; color: #ea0a2a; font-weight: 700; font-size: 24px; text-shadow: 0 0 6px #000; }
+  .bar { position: absolute; left: 96px; bottom: 54px; width: 1728px; height: 10px; background: rgba(255,255,255,0.15); border-radius: 5px; }
+  .bar i { position: absolute; top: -5px; width: 20px; height: 20px; border-radius: 50%; background: #ea0a2a; left: 0; }
+</style>
+</head>
+<body>
+  <div class="panel">
+    <h1><span>STUDIO HTML OVERLAY TEST</span><span class="clock" id="clock">--:--:--</span></h1>
+
+    <section>
+      <h2>Address and query values</h2>
+      <div class="rows" id="address"></div>
+    </section>
+
+    <section>
+      <h2>Time format demo</h2>
+      <div class="rows" id="times"></div>
+    </section>
+
+    <section>
+      <h2>Text inside the page (changes here mean Studio edits the page itself)</h2>
+      <div class="rows">
+        <div>FREQ name</div><div class="mono" id="ph1">FREQ_NOW_TITLE</div>
+        <div>Braces</div><div class="mono" id="ph2">{{now.title}}</div>
+        <div>Code</div><div class="mono" id="ph3">__F01__</div>
+      </div>
+    </section>
+
+  </div>
+
+  <div class="panel right">
+    <section>
+      <h2>Player</h2>
+      <div class="rows" id="player"></div>
+    </section>
+
+    <section>
+      <h2>Messages and function calls received</h2>
+      <div class="log mono" id="log"><span class="none">Nothing received yet</span></div>
+    </section>
+
+    <section>
+      <h2>Extra globals added by the player</h2>
+      <div class="rows" id="globals"><div class="none">Checking</div><div></div></div>
+    </section>
+  </div>
+
+  <div class="swatches" aria-hidden="true">
+    <div class="swatch" style="opacity:1">100%</div>
+    <div class="swatch" style="background:rgba(255,255,255,.5)">50%</div>
+    <div class="swatch" style="background:rgba(255,255,255,.1)">10%</div>
+    <div class="swatch" style="background:transparent">0%</div>
+  </div>
+  <div class="bar" aria-hidden="true"><i id="dot"></i></div>
+
+<script>
+(function () {
+  'use strict';
+  var t0 = Date.now(), frames = 0, fps = 0, lastFpsAt = performance.now();
+  var $ = function (id) { return document.getElementById(id); };
+  var esc = function (s) { return String(s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); };
+  var short = function (v) { var s; try { s = typeof v === 'string' ? v : JSON.stringify(v); } catch (e) { s = String(v); } if (s === undefined) s = String(v); return s.length > 180 ? s.slice(0, 177) + '...' : s; };
+  function rows(el, pairs) {
+    el.innerHTML = pairs.length ? pairs.map(function (p) { return '<div>' + esc(p[0]) + '</div><div class="' + (p[2] || 'mono') + '">' + p[1] + '</div>'; }).join('') : '<div class="none">None</div><div></div>';
+  }
+
+  // ---- what the page can see about its player
+  function renderPlayer() {
+    var tz = ''; try { tz = Intl.DateTimeFormat().resolvedOptions().timeZone || ''; } catch (e) {}
+    rows($('player'), [
+      ['Running for', ((Date.now() - t0) / 1000).toFixed(0) + ' s, ' + fps + ' fps'],
+      ['Page size', esc(innerWidth + ' x ' + innerHeight + ' at ' + devicePixelRatio + 'x')],
+      ['Player clock zone', esc(tz || 'unknown')],
+      ['Browser', esc(navigator.userAgent)],
+      ['Loaded from', esc(document.referrer || 'no referrer')],
+    ]);
+  }
+
+  // ---- address and query values
+  var params = [];
+  function renderAddress() {
+    var p = [['Full address', esc(location.href)]];
+    try { new URLSearchParams(location.search).forEach(function (v, k) { params.push([k, v]); }); } catch (e) {}
+    params.forEach(function (kv) {
+      var v = kv[1], changed = v && !/^__F\d\d__$/.test(v);
+      p.push(['?' + kv[0], esc(v === '' ? '(empty)' : v), changed ? 'mono hit' : 'mono warn']);
+    });
+    if (!params.length) p.push(['Query values', '<span class="none">None. Add ?f01=__F01__ to the URL in Studio and map __F01__ to a field.</span>', '']);
+    p.push(['Hash', esc(location.hash || '(none)')]);
+    rows($('address'), p);
+  }
+
+  // ---- time format demo: full date-time -> "8pm"
+  var ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/;
+  function nice(iso, tz) {
+    var d = new Date(iso); if (isNaN(d)) return null;
+    var o = { hour: 'numeric', minute: '2-digit', hour12: true };
+    try { if (tz) o.timeZone = tz; new Intl.DateTimeFormat('en-GB', o); } catch (e) { delete o.timeZone; }
+    var parts = new Intl.DateTimeFormat('en-US', o).formatToParts(d), h = '', m = '', ap = '';
+    parts.forEach(function (x) { if (x.type === 'hour') h = x.value; if (x.type === 'minute') m = x.value; if (x.type === 'dayPeriod') ap = x.value.toLowerCase(); });
+    return h + (m === '00' ? '' : ':' + m) + ap;
+  }
+  var received = {}; // values from messages / update()
+  function renderTimes() {
+    var tz = '';
+    params.forEach(function (kv) { if (/^[A-Za-z]+\/[A-Za-z_\-\/]+$/.test(kv[1])) tz = kv[1]; });
+    var p = [['Example', esc('2026-11-10T20:00:00.000+00:00') + ' &rarr; <b>' + esc(nice('2026-11-10T20:00:00.000+00:00', 'Europe/London')) + '</b> (London)', 'mono']];
+    var seen = 0;
+    params.concat(Object.keys(received).map(function (k) { return [k, received[k]]; })).forEach(function (kv) {
+      if (typeof kv[1] === 'string' && ISO.test(kv[1])) {
+        seen++;
+        p.push([kv[0], esc(kv[1]) + ' &rarr; <b>' + esc(nice(kv[1], tz) || '?') + '</b>' + (tz ? ' (' + esc(tz) + ')' : ' (offset in the value)'), 'mono hit']);
+      }
+    });
+    if (!seen) p.push(['From Studio', '<span class="none">No date-times received yet</span>', '']);
+    rows($('times'), p);
+  }
+
+  // ---- messages and template-style function calls
+  var log = [];
+  function addLog(kind, data) {
+    log.unshift(new Date().toTimeString().slice(0, 8) + '  ' + kind + '  ' + short(data));
+    log = log.slice(0, 6);
+    $('log').innerHTML = log.map(function (l) { return '<div>' + esc(l) + '</div>'; }).join('');
+    if (data && typeof data === 'object') Object.keys(data).forEach(function (k) { if (typeof data[k] === 'string') received[kind + '.' + k] = data[k]; });
+    else if (typeof data === 'string') { try { var j = JSON.parse(data); if (j && typeof j === 'object') Object.keys(j).forEach(function (k) { if (typeof j[k] === 'string') received[kind + '.' + k] = j[k]; }); } catch (e) {} }
+    renderTimes();
+  }
+  window.addEventListener('message', function (e) { addLog('message from ' + (e.origin || '?'), e.data); });
+  window.addEventListener('hashchange', function () { addLog('hash changed', location.hash); renderAddress(); });
+  // names used by common broadcast HTML template players (CasparCG-style and others); record any call
+  ['update', 'play', 'stop', 'next', 'remove', 'SetData', 'setData', 'onData', 'updateData', 'init'].forEach(function (name) {
+    if (typeof window[name] === 'undefined') window[name] = function () { addLog(name + '()', Array.prototype.slice.call(arguments)); };
+  });
+
+  // ---- globals the player injected (compare with a clean window)
+  var baseline = null;
+  function renderGlobals() {
+    if (!baseline) {
+      try { var f = document.createElement('iframe'); f.style.display = 'none'; document.body.appendChild(f); baseline = new Set(Object.getOwnPropertyNames(f.contentWindow)); f.remove(); } catch (e) { baseline = new Set(); }
+      ['update', 'play', 'stop', 'next', 'remove', 'SetData', 'setData', 'onData', 'updateData', 'init'].forEach(function (n) { baseline.add(n); });
+    }
+    var extra = Object.getOwnPropertyNames(window).filter(function (k) { return !baseline.has(k) && !/^webkit|^on/.test(k); });
+    rows($('globals'), extra.slice(0, 8).map(function (k) { var v; try { v = window[k]; } catch (e) { v = '(unreadable)'; } return [k, esc(typeof v === 'function' ? 'function' : short(v)), 'mono hit']; }));
+  }
+
+  // ---- watch for page text being replaced
+  var original = { ph1: 'FREQ_NOW_TITLE', ph2: '{{now.title}}', ph3: '__F01__' };
+  function checkText() { Object.keys(original).forEach(function (id) { var el = $(id); el.className = 'mono' + (el.textContent !== original[id] ? ' hit' : ''); }); }
+
+  // ---- clock and motion
+  function tick(now) {
+    frames++;
+    if (now - lastFpsAt >= 1000) { fps = frames; frames = 0; lastFpsAt = now; renderPlayer(); }
+    var d = new Date(); $('clock').textContent = d.toTimeString().slice(0, 8);
+    $('dot').style.left = (((Date.now() - t0) / 10000) % 1) * 1708 + 'px';
+    requestAnimationFrame(tick);
+  }
+
+  renderPlayer(); renderAddress(); renderTimes(); renderGlobals(); checkText();
+  setInterval(function () { renderGlobals(); checkText(); }, 2000);
+  requestAnimationFrame(tick);
+})();
+</script>
+</body>
+</html>
